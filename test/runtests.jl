@@ -1,17 +1,19 @@
 using BandedMatrices
-using LinearAlgebra
-using SparseArrays
 using Test
 
-using Aqua
+import Aqua
+downstream_test = "--downstream_integration_test" in ARGS
 @testset "Project quality" begin
-    Aqua.test_all(BandedMatrices, ambiguities=false, piracies=false)
+    Aqua.test_all(BandedMatrices, ambiguities=false, piracies=false,
+        stale_deps=!downstream_test)
 end
 
 using Documenter
-DocMeta.setdocmeta!(BandedMatrices, :DocTestSetup, :(using BandedMatrices))
-@testset "doctests" begin
-    doctest(BandedMatrices)
+if v"1.10" <= VERSION < v"1.11.0-"
+    DocMeta.setdocmeta!(BandedMatrices, :DocTestSetup, :(using BandedMatrices))
+    @testset "doctests" begin
+        doctest(BandedMatrices)
+    end
 end
 
 include("test_banded.jl")
@@ -26,3 +28,5 @@ include("test_symbanded.jl")
 include("test_tribanded.jl")
 include("test_interface.jl")
 include("test_miscs.jl")
+include("test_sum.jl")
+include("test_cat.jl")

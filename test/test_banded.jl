@@ -1,34 +1,14 @@
+module TestBanded
+
 using ArrayLayouts
 using BandedMatrices
-import BandedMatrices: _BandedMatrix
+using BandedMatrices: _BandedMatrix, resize
 using FillArrays
 using LinearAlgebra
 using SparseArrays
 using Test
 
-# used to test general matrix backends
-struct MyMatrix{T} <: AbstractMatrix{T}
-    A::Matrix{T}
-end
-
-MyMatrix{T}(::UndefInitializer, n::Int, m::Int) where T = MyMatrix{T}(Array{T}(undef, n, m))
-MyMatrix(A::AbstractMatrix{T}) where T = MyMatrix{T}(Matrix{T}(A))
-Base.convert(::Type{MyMatrix{T}}, A::MyMatrix{T}) where T = A
-Base.convert(::Type{MyMatrix{T}}, A::MyMatrix) where T = MyMatrix(convert(AbstractArray{T}, A.A))
-Base.convert(::Type{MyMatrix}, A::MyMatrix)= A
-Base.convert(::Type{AbstractArray{T}}, A::MyMatrix) where T = MyMatrix(convert(AbstractArray{T}, A.A))
-Base.convert(::Type{AbstractMatrix{T}}, A::MyMatrix) where T = MyMatrix(convert(AbstractArray{T}, A.A))
-Base.convert(::Type{MyMatrix{T}}, A::AbstractArray{T}) where T = MyMatrix{T}(A)
-Base.convert(::Type{MyMatrix{T}}, A::AbstractArray) where T = MyMatrix{T}(convert(AbstractArray{T}, A))
-Base.convert(::Type{MyMatrix}, A::AbstractArray{T}) where T = MyMatrix{T}(A)
-Base.getindex(A::MyMatrix, kj...) = A.A[kj...]
-Base.getindex(A::MyMatrix, ::Colon, j::AbstractVector) = MyMatrix(A.A[:,j])
-Base.setindex!(A::MyMatrix, v, kj...) = setindex!(A.A, v, kj...)
-Base.size(A::MyMatrix) = size(A.A)
-Base.similar(::Type{MyMatrix{T}}, m::Int, n::Int) where T = MyMatrix{T}(undef, m, n)
-Base.similar(::MyMatrix{T}, m::Int, n::Int) where T = MyMatrix{T}(undef, m, n)
-Base.similar(::MyMatrix, ::Type{T}, m::Int, n::Int) where T = MyMatrix{T}(undef, m, n)
-
+include("mymatrix.jl")
 
 @testset "BandedMatrix" begin
     @testset "Undef BandedMatrix" begin
@@ -65,6 +45,12 @@ Base.similar(::MyMatrix, ::Type{T}, m::Int, n::Int) where T = MyMatrix{T}(undef,
         @test BandedMatrix{Int64, typeof(matrix)}(matrix, (1, 1)) isa BandedMatrix{Int64, typeof(matrix)}
         @test BandedMatrix{Int64, typeof(matrix)}(matrix, (1, 1)).data isa typeof(matrix)
         @test_throws UndefRefError BandedMatrix{Vector{Float64}}(undef, (5,5), (1,1))[1,1]
+
+        @testset "parent" begin
+            A = zeros(3,5)
+            B = _BandedMatrix(A, 5, 1, 1)
+            @test parent(B) === A
+        end
 
         @testset "Construction from Diagonal" begin
             D = Diagonal(1:4)
@@ -440,6 +426,11 @@ Base.similar(::MyMatrix, ::Type{T}, m::Int, n::Int) where T = MyMatrix{T}(undef,
             B = brand(5,5,1,1)
             @test Matrix(sparse(B)) == Matrix(B)
         end
+
+        @testset "abstract ambiguity" begin
+            B = brand(5,5,1,1)
+            @test convert(AbstractArray{Float64}, B) ≡ B
+        end
     end
 
     @testset "real-imag" begin
@@ -550,4 +541,51 @@ Base.similar(::MyMatrix, ::Type{T}, m::Int, n::Int) where T = MyMatrix{T}(undef,
         copyto!(view(B, :, :), S)
         @test B == 2B2
     end
+
+    @testset "offset views" begin
+        B = BandedMatrix(0=>1:4)
+        A = view(B, Base.IdentityUnitRange(2:4), 1:4)
+        @test !any(in(axes(A,1)), BandedMatrices.colrange(A, 1))
+        @test BandedMatrices.colrange(A, 2) == 2:2
+        @test BandedMatrices.colrange(A, 3) == 3:3
+        @test BandedMatrices.colrange(A, 4) == 4:4
+    end
+
+    @testset "resize" begin
+        B = brand(5,6,2,1)
+        B̃ = resize(B, 10,7)
+        @test size(B̃) == (10,7)
+        @test bandwidths(B̃) == (2,1)
+        @test B̃[1:5,1:6] == B
+
+        C = resize(view(B,1:4,1:5), 10, 7)
+        @test size(C) == (10,7)
+        @test bandwidths(C) == (2,1)
+        @test C[1:4,1:5] == B[1:4,1:5]
+
+        A = brand(4,5,1,1)
+        @test resize(A,6,5)[1:4,1:5] == A
+        @test resize(view(A,2:3,2:5),5,5) isa BandedMatrix
+        @test resize(view(A,2:3,2:5),5,5)[1:2,1:4] == A[2:3,2:5]
+    end
+
+    @testset "UniformScaling" begin
+        @test BandedMatrix(I, (3,4)) == BandedMatrix{Int}(I, (3,4)) == BandedMatrix{Int,Matrix{Int}}(I, (3,4))  == BandedMatrix{Int,Matrix{Int},Base.OneTo{Int}}(I, (3,4)) == Matrix(I,(3,4))
+        @test eltype(BandedMatrix(I, (3,4))) == Bool
+        @test eltype(BandedMatrix{Int}(I, (3,4))) == Int
+        @test bandwidths(BandedMatrix(I, (3,4))) == (0,0)
+        @test bandwidths(BandedMatrix(I, (3,4), (1,2))) == (1,2)
+        @test_throws BoundsError BandedMatrix(I, (3,4), (-1,2))
+    end
+
+
+    @testset "one" begin
+        @test_throws DimensionMismatch one(brand(4,5,1,1))
+        Q = one(brand(5,5,1,1))
+        @test bandwidths(Q) == (0,0)
+        @test Q == I(5)
+        @test eltype(Q) == Float64
+    end
 end
+
+end # module

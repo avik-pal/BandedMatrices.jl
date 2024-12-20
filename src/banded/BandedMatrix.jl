@@ -16,8 +16,8 @@ function _BandedMatrix end
 struct BandedMatrix{T, CONTAINER, RAXIS} <: AbstractBandedMatrix{T}
     data::CONTAINER  # l+u+1 x n (# of columns)
     raxis::RAXIS # axis for rows (col axis comes from data)
-    l::Int # lower bandwidth ≥0
-    u::Int # upper bandwidth ≥0
+    l::Int # lower bandwidth (possibly negative)
+    u::Int # upper bandwidth (possibly negative)
     global function _BandedMatrix(data::AbstractMatrix{T}, raxis::AbstractUnitRange, l, u) where {T}
         if size(data,1) ≠ l+u+1  && !(size(data,1) == 0 && -l > u)
            error("Data matrix must have number rows equal to number of bands")
@@ -28,6 +28,8 @@ struct BandedMatrix{T, CONTAINER, RAXIS} <: AbstractBandedMatrix{T}
 end
 
 _BandedMatrix(data::AbstractMatrix, m::Integer, l, u) = _BandedMatrix(data, oneto(m), l, u)
+
+Base.parent(B::BandedMatrix) = B.data
 
 const DefaultBandedMatrix{T} = BandedMatrix{T,Matrix{T},OneTo{Int}}
 
@@ -57,7 +59,7 @@ BandedMatrix{T, C}(::UndefInitializer, (n,m)::NTuple{2,Integer}, (a,b)::NTuple{2
 BandedMatrix{T, C}(::UndefInitializer, (n,m)::NTuple{2,Integer}, (a,b)::NTuple{2,Integer}) where {T, C<:AbstractMatrix{T}} =
     _BandedMatrix(C(undef,max(0,b+a+1),m),n,a,b)
 BandedMatrix{T, C}(::UndefInitializer, (n,m)::NTuple{2,Integer}, (a,b)::NTuple{2,Integer})  where {T<:Number, C<:AbstractMatrix{T}} =
-    _BandedMatrix(fill!(similar(C, max(0,b+a+1),m), zero(T)),n,a,b)
+    _BandedMatrix(fill!(convert(C, similar(C, max(0,b+a+1),m)), zero(T)),n,a,b)
 
 BandedMatrix{T}(::UndefInitializer, nm::NTuple{2,Integer}, ab::NTuple{2,Integer}) where T =
 BandedMatrix{T, Matrix{T}}(undef,nm,ab)
@@ -71,6 +73,20 @@ BandedMatrix{T}(::UndefInitializer, nm::NTuple{2,OneTo{Int}}, ab::NTuple{2,Integ
 
 BandedMatrix{V}(M::BandedMatrix) where {V} = _BandedMatrix(AbstractMatrix{V}(M.data), M.raxis, M.l, M.u)
 BandedMatrix(M::BandedMatrix{V}) where {V} = _BandedMatrix(AbstractMatrix{V}(M.data), M.raxis, M.l, M.u)
+
+function BandedMatrix{T, C, Ax}(A::UniformScaling, nm::NTuple{2,Integer}, (l,u)::NTuple{2,Integer}=(0,0)) where {T,C,Ax}
+    ret = BandedMatrix{T, C, Ax}(undef, nm, (l,u))
+    zero!(ret.data)
+    ret.data[u+1,:] .= A.λ
+    ret
+end
+BandedMatrix{T,C}(A::UniformScaling, nm::NTuple{2,Integer}, ab::NTuple{2,Integer}=(0,0)) where {T,C} = 
+    BandedMatrix{T, C, OneTo{Int}}(A, nm, ab)
+BandedMatrix{T}(A::UniformScaling, nm::NTuple{2,Integer}, ab::NTuple{2,Integer}=(0,0)) where T = 
+    BandedMatrix{T, Matrix{T}}(A, nm, ab)
+BandedMatrix(A::UniformScaling, nm::NTuple{2,Integer}, ab::NTuple{2,Integer}=(0,0)) = 
+    BandedMatrix{eltype(A)}(A, nm, ab)
+
 
 convert(::Type{BandedMatrix{V}}, M::BandedMatrix{V}) where {V} = M
 convert(::Type{BandedMatrix{V}}, M::BandedMatrix) where {V} =
@@ -97,6 +113,7 @@ convert(BM::Type{BandedMatrix{T, C, OneTo{Int}}}, M::BandedMatrix) where {T, C <
 for MAT in (:AbstractBandedMatrix, :AbstractMatrix, :AbstractArray)
     @eval begin
         convert(::Type{$MAT{T}}, M::BandedMatrix) where {T} = convert(BandedMatrix{T}, M)
+        convert(::Type{$MAT{T}}, M::BandedMatrix{T}) where {T} = convert(BandedMatrix{T}, M)
         convert(::Type{$MAT}, M::BandedMatrix) = M
         $MAT{T}(M::BandedMatrix) where {T} = BandedMatrix{T}(M)
         $MAT(M::BandedMatrix{T}) where {T} = BandedMatrix{T}(M)
@@ -417,8 +434,11 @@ end
 @propagate_inbounds function getindex(A::BandedMatrix, ::Colon, j::Int)
     @boundscheck checkbounds(A, axes(A,1), j)
     r = similar(A, axes(A,1))
-    r[firstindex(r):colstart(A,j)-1] .= zero(eltype(r))
-    r[colrange(A,j)] = @view A.data[data_colrange(A,j)]
+    r[firstindex(r):min(size(A, 1), colstart(A,j)-1)] .= zero(eltype(r))
+    # broadcasted assignment is currently faster than setindex
+    # see https://github.com/JuliaLang/julia/issues/40962#issuecomment-1921340377
+    # may need revisiting in the future
+    r[colrange(A,j)] .= @view A.data[data_colrange(A,j)]
     r[colstop(A,j)+1:end] .= zero(eltype(r))
     return r
 end
@@ -433,7 +453,7 @@ end
 @propagate_inbounds function getindex(A::BandedMatrix, k::Int, ::Colon)
     @boundscheck checkbounds(A, k, axes(A,2))
     r = similar(A, axes(A,2))
-    r[firstindex(r):rowstart(A,k)-1] .= zero(eltype(r))
+    r[firstindex(r):min(size(A, 2), rowstart(A,k)-1)] .= zero(eltype(r))
     r[rowrange(A,k)] = @view A.data[data_rowrange(A,k)]
     r[rowstop(A,k)+1:end] .= zero(eltype(r))
     return r
@@ -566,9 +586,9 @@ data_colrange(A::BandedMatrix{T}, i::Integer) where {T} =
                                 ((i-1)*size(A.data,1))
 
 function data_rowrange(A::BandedMatrix, rowind::Integer)
-    range(rowind ≤ 1+A.l ? A.u+rowind : (rowind-A.l)*size(A.data,1),
-        step = size(A.data,1)-1,
-        length = length(rowrange(A,rowind)),
+    StepRangeLen(rowind ≤ 1+A.l ? A.u+rowind : (rowind-A.l)*size(A.data,1),
+        size(A.data,1)-1,
+        length(rowrange(A,rowind))
     )
 end
 
@@ -965,10 +985,49 @@ end
 function show(io::IO, B::BandedMatrix)
     print(io, "BandedMatrix(")
     l, u = bandwidths(B)
-    for (ind, b) in enumerate(-l:u)
+    limit = get(io, :limit, true)
+    br = limit ? intersect(-l:u, range(-l,length=4)) : -l:u
+    for (ind, b) in enumerate(br)
         r = @view B[band(b)]
         show(io, b => r)
-        b == u || print(io, ", ")
+        b == last(br) || print(io, ", ")
+    end
+    if limit && br != -l:u
+        br2 = max(maximum(br)+1, u-3):u
+        if minimum(br2) == maximum(br)+1
+            print(io, ", ")
+        else
+            print(io, "  …  ")
+        end
+        for (ind, b) in enumerate(br2)
+            r = @view B[band(b)]
+            show(io, b => r)
+            b == u || print(io, ", ")
+        end
     end
     print(io, ")")
+end
+
+
+###
+# resize
+###
+
+function resize(A::BandedMatrix, n::Integer, m::Integer)
+    l,u = bandwidths(A)
+    _BandedMatrix(reshape(resize!(vec(bandeddata(A)), (l+u+1)*m), l+u+1, m), n, l,u)
+end
+function resize(A::BandedSubBandedMatrix, n::Integer, m::Integer)
+    l,u = bandwidths(A)
+    _BandedMatrix(reshape(resize!(vec(copy(bandeddata(A))), (l+u+1)*m), l+u+1, m), n, l,u)
+end
+
+###
+# one
+###
+
+function one(A::BandedMatrix)
+    m,n = size(A)
+    m==n || throw(DimensionMismatch("multiplicative identity defined only for square matrices"))
+    typeof(A)(I, (m,n))
 end

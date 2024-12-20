@@ -1,8 +1,10 @@
-using BandedMatrices, LinearAlgebra, ArrayLayouts, FillArrays, Test
-import BandedMatrices: banded_mul!, isbanded, AbstractBandedLayout, BandedStyle,
-                        rowsupport, colsupport, _BandedMatrix, BandedColumns, bandeddata
+module TestInterface
+
+using BandedMatrices, LinearAlgebra, ArrayLayouts, FillArrays, Test, Random
+import BandedMatrices: isbanded, AbstractBandedLayout, BandedStyle,
+                        BandedColumns, bandeddata
 import ArrayLayouts: OnesLayout, UnknownLayout
-using InfiniteArrays
+using InfiniteArrays, SparseArrays
 
 struct PseudoBandedMatrix{T} <: AbstractMatrix{T}
     data::Array{T}
@@ -308,6 +310,18 @@ end
     @test layout_getindex(T,1:10,1:10) isa BandedMatrix
 end
 
+@testset "OneElement" begin
+    o = OneElement(1, 3, 5)
+    @test bandwidths(o) == (2,-2)
+    n,m = rand(1:10,2)
+    o = OneElement(1, (rand(1:n),rand(1:m)), (n, m))
+    @test bandwidths(o) == bandwidths(sparse(o))
+    o = OneElement(1, (n+1,m+1), (n, m))
+    @test bandwidths(o) == bandwidths(Zeros(o))
+    o = OneElement(1, 6, 5)
+    @test bandwidths(o) == bandwidths(Zeros(o))
+end
+
 @testset "rot180" begin
     A = brand(5,5,1,2)
     R = rot180(A)
@@ -352,3 +366,5 @@ end
     S = Symmetric(brand(10,10,1,2))
     @test permutedims(S) ≡ S
 end
+
+end # module

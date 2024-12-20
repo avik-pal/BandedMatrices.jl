@@ -41,7 +41,7 @@ bandrange(A) = -bandwidth(A,1):bandwidth(A,2)
 """
     colstart(A, i::Integer)
 
-Return the starting row index of the filled bands in the i-th column,
+Return the starting row index of the filled bands in the `i`-th column,
 bounded by the actual matrix size.
 
 # Examples
@@ -60,12 +60,12 @@ julia> BandedMatrices.colstart(A, 4)
 3
 ```
 """
-@inline colstart(A, i::Integer) = max(i-bandwidth(A,2), 1)
+@inline colstart(A, i::Integer) = max(i-bandwidth(A,2), 1) + firstindex(A,1)-1
 
 """
     colstop(A, i::Integer)
 
-Return the stopping row index of the filled bands in the i-th column,
+Return the stopping row index of the filled bands in the `i`-th column,
 bounded by the actual matrix size.
 
 # Examples
@@ -84,12 +84,12 @@ julia> BandedMatrices.colstop(A, 4)
 4
 ```
 """
-@inline  colstop(A, i::Integer) = max(min(i+bandwidth(A,1), size(A, 1)), 0)
+@inline colstop(A, i::Integer) = clamp(i+bandwidth(A,1), 0:size(A, 1)) + firstindex(A,1)-1
 
 """
     rowstart(A, i::Integer)
 
-Return the starting column index of the filled bands in the i-th row,
+Return the starting column index of the filled bands in the `i`-th row,
 bounded by the actual matrix size.
 
 # Examples
@@ -108,12 +108,12 @@ julia> BandedMatrices.rowstart(A, 3)
 3
 ```
 """
-@inline rowstart(A, i::Integer) = max(i-bandwidth(A,1), 1)
+@inline rowstart(A, i::Integer) = max(i-bandwidth(A,1), 1) + firstindex(A,2)-1
 
 """
     rowstop(A, i::Integer)
 
-Return the stopping column index of the filled bands in the i-th row,
+Return the stopping column index of the filled bands in the `i`-th row,
 bounded by the actual matrix size.
 
 # Examples
@@ -132,7 +132,7 @@ julia> BandedMatrices.rowstop(A, 4)
 4
 ```
 """
-@inline  rowstop(A, i::Integer) = max(min(i+bandwidth(A,2), size(A, 2)), 0)
+@inline rowstop(A, i::Integer) = clamp(i+bandwidth(A,2), 0:size(A, 2)) + firstindex(A,2)-1
 
 """
     colrange(A, i::Integer)
@@ -202,7 +202,7 @@ julia> BandedMatrices.collength(A, 2)
 2
 ```
 """
-@inline collength(A, i::Integer) = max(colstop(A, i) - colstart(A, i) + 1, 0)
+@inline collength(A, i::Integer) = length(colrange(A, i))
 
 """
     rowlength(A, i::Integer)
@@ -225,7 +225,7 @@ julia> BandedMatrices.rowlength(A, 4)
 1
 ```
 """
-@inline rowlength(A, i::Integer) = max(rowstop(A, i) - rowstart(A, i) + 1, 0)
+@inline rowlength(A, i::Integer) = length(rowrange(A, i))
 
 @inline banded_colsupport(A, j::Integer) = colrange(A, j)
 @inline banded_rowsupport(A, j::Integer) = rowrange(A, j)
@@ -335,4 +335,123 @@ bandwidths(A::AdjOrTrans{T,S}) where {T,S} = reverse(bandwidths(parent(A)))
 if VERSION >= v"1.9"
     copy(A::Adjoint{T,<:AbstractBandedMatrix}) where T = copy(parent(A))'
     copy(A::Transpose{T,<:AbstractBandedMatrix}) where T = transpose(copy(parent(A)))
+end
+
+function sum!(ret::AbstractArray, A::AbstractBandedMatrix)
+    #Behaves similarly to Base.sum!
+    fill!(ret, zero(eltype(ret)))
+    n,m = size(A)
+    s = size(ret)
+    l = length(s)
+    #Check for singleton dimension and perform respective sum
+    if s[1] == 1 && (l == 1 || s[2]==1)
+        for j = 1:m, i = colrange(A, j)
+            ret .+= A[i, j]
+        end
+    elseif s[1] == n && (l == 1 || s[2]==1)
+        for i = 1:n, j = rowrange(A, i)
+            ret[i, 1] += A[i, j]
+        end
+    elseif s[1] == 1 && s[2] == m
+        for j = 1:m, i = colrange(A, j)
+            ret[1, j] += A[i, j]
+        end
+    elseif s[1] == n && s[2] == m
+        copyto!(ret,A)
+    else
+        throw(DimensionMismatch("reduction on matrix of size ($n, $m) with output size $s"))
+    end
+    #return the value to mimic Base.sum!
+    ret
+end
+
+function sum(A::AbstractBandedMatrix; dims=:)
+    if dims isa Colon
+        l, u = bandwidths(A)
+        ret = zero(eltype(A))
+        if l + u < 0
+            return ret
+        end
+        n, m = size(A)
+        for j = 1:m, i = colrange(A, j)
+            ret += A[i, j]
+        end
+        ret
+    elseif dims > 2
+        A
+    elseif dims == 2
+        l, u = bandwidths(A)
+        n, m = size(A)
+        ret = zeros(eltype(A), n, 1)
+        if l + u < 0
+            return ret
+        end
+        sum!(ret, A)
+        ret
+    elseif dims == 1
+        l, u = bandwidths(A)
+        n, m = size(A)
+        ret = zeros(eltype(A), 1, m)
+        if l + u < 0
+            return ret
+        end
+        sum!(ret, A)
+        ret
+    else
+        throw(ArgumentError("dimension must be ≥ 1, got $dims"))
+    end
+end
+
+###
+# vcat
+###
+
+function Base.vcat(x::AbstractBandedMatrix...)
+    #avoid unnecessary steps for singleton
+    if length(x) == 1
+        return x[1]
+    end
+
+    #instantiate the returned banded matrix with zeros and required bandwidths/dimensions
+    m = size(x[1], 2)
+    l,u = -m, typemin(Int)
+    n = 0
+    isempty = true
+
+    #Check for dimension error and calculate bandwidths
+    for A in x
+        if size(A, 2) != m
+            sizes = Tuple(size(b, 2) for b in x)
+            throw(DimensionMismatch("number of columns of each matrix must match (got $sizes)"))
+        end
+
+        l_A, u_A = bandwidths(A)
+        if l_A + u_A >= 0
+            isempty = false
+            u = max(u, min(m - 1, u_A) - n)
+            l = max(l, min(size(A, 1) - 1, l_A) + n)
+        end
+
+        n += size(A, 1)
+    end
+
+    type = promote_type(eltype.(x)...)
+    if isempty
+        return BandedMatrix{type}(undef, (n, m), bandwidths(Zeros(1)))
+    end
+    ret = BandedMatrix(Zeros{type}(n, m), (l, u))
+
+    #Populate the banded matrix
+    row_offset = 0
+    for A in x
+        n_A = size(A, 1)
+
+        for i = 1:n_A, j = rowrange(A, i)
+            ret[row_offset + i, j] = A[i, j]
+        end
+
+        row_offset += n_A
+    end
+
+    ret
 end

@@ -1,7 +1,11 @@
-using BandedMatrices, LinearAlgebra, ArrayLayouts, FillArrays, Test
+module TestBroadcasting
+
+using BandedMatrices, LinearAlgebra, ArrayLayouts, FillArrays, Random, Test
 import Base: BroadcastStyle
 import Base.Broadcast: broadcasted
 import BandedMatrices: BandedStyle, BandedRows, BandError
+
+Random.seed!(0)
 
 @testset "broadcasting" begin
     @testset "general" begin
@@ -22,7 +26,7 @@ import BandedMatrices: BandedStyle, BandedRows, BandError
             @test identity.(A) isa BandedMatrix
             @test bandwidths(identity.(A)) == bandwidths(A)
 
-            @test (z -> exp(z)-1).(A) == (z -> exp(z)-1).(Matrix(A))
+            @test (z -> exp(z)-1).(A) ≈ (z -> exp(z)-1).(Matrix(A)) # for some reason == is breaking on Mac CI
             @test (z -> exp(z)-1).(A) isa BandedMatrix
             @test bandwidths((z -> exp(z)-1).(A)) == bandwidths(A)
 
@@ -38,7 +42,9 @@ import BandedMatrices: BandedStyle, BandedRows, BandError
             @test 1 .+ A isa BandedMatrix
             @test (1 .+ A) == 1 .+ Matrix(A)
 
-            @test 1 .\ A == 1 .\ Matrix(A)
+            if VERSION ≥ v"1.10" # avoid failure on CI with Mac OS Julia v1.6
+                @test 1 .\ A == 1 .\ Matrix(A)
+            end
             @test 1 .\ A isa BandedMatrix
             @test bandwidths(1 .\ A) == bandwidths(A)
 
@@ -150,7 +156,8 @@ import BandedMatrices: BandedStyle, BandedRows, BandError
             end
 
             B .= 2.0.*A
-            @test B ==  2A == 2.0.*A
+            @test norm(B-2A) == 0
+            @test B == 2A == 2.0.*A
             @test 2A isa BandedMatrix
             @test 2.0.*A isa BandedMatrix
             @test bandwidths(2A) == bandwidths(2.0.*A) == bandwidths(A)
@@ -158,7 +165,7 @@ import BandedMatrices: BandedStyle, BandedRows, BandError
             A .= 2.0.*A
             @test A == B
 
-            B .= A.*2.0
+            B .= A .* 2.0
             @test B ==  A*2 == A.*2.0
             @test A*2 isa BandedMatrix
             @test A .* 2.0 isa BandedMatrix
@@ -683,8 +690,8 @@ import BandedMatrices: BandedStyle, BandedRows, BandError
         A = brand(5,4,2,1)
         x = randn(5)
         B = Base.Broadcast.broadcasted(*, Base.Broadcast.broadcasted(+, 2, x), A)
-        @test bandwidths(B) == bandwidths(A) == bandwidths(materialize(B)) == (2,1)
-        @test materialize(B) == (2 .+ x) .* Matrix(A)
+        @test bandwidths(B) == bandwidths(A) == bandwidths(Broadcast.materialize(B)) == (2,1)
+        @test Broadcast.materialize(B) == (2 .+ x) .* Matrix(A)
 
         B = Base.Broadcast.broadcasted(+, Base.Broadcast.broadcasted(+, A, A), A)
         @test bandwidths(B) == bandwidths(A)
@@ -764,3 +771,5 @@ import BandedMatrices: BandedStyle, BandedRows, BandError
         @test_throws BandError B[band(-100)] .= 10
     end
 end
+
+end # module

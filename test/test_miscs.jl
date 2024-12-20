@@ -1,4 +1,6 @@
-using BandedMatrices, LinearAlgebra, FillArrays, Test
+module TestMisc
+
+using BandedMatrices, LinearAlgebra, FillArrays, Test, SparseArrays
 import BandedMatrices: _BandedMatrix, DefaultBandedMatrix
 
 @testset "misc tests" begin
@@ -48,7 +50,16 @@ import BandedMatrices: _BandedMatrix, DefaultBandedMatrix
             @test bA isa BandedMatrix
             @test bA == A
             @test bandwidths(bA) == min.((l,u),9)
+            v = sparsevec(brand(10, 1, l, u))
+            @test bandwidths(v) == (l, min(0, u))
         end
+
+        l, u = -1, 0
+        A = brand(10, 10, l, u)
+        sA = sparse(A)
+        @test bandwidths(sA) == bandwidths(Zeros(1))
+        v = sparsevec(brand(10, 1, l, u))
+        @test bandwidths(v) == bandwidths(Zeros(1))
 
         for diags = [(-1 => ones(Int, 5),),
                      (-2 => ones(Int, 5),),
@@ -93,6 +104,13 @@ import BandedMatrices: _BandedMatrix, DefaultBandedMatrix
         Bshowstr = sprint(show, B)
         @test Bshowstr == "BandedMatrix($(-1=>[1:4;]), $(0=>[1:5;]), $(1=>[1:4;]))"
 
+        B = BandedMatrix(-3=>1:4, 3=>1:4);
+        @test sprint(show, B) == sprint(show, B, context=:limit=>true)
+        B = BandedMatrix(-5=>1:1, 5=>1:1)
+        expstr = "BandedMatrix(-5 => [1], -4 => [0, 0], -3 => [0, 0, 0], -2 => [0, 0, 0, 0]"*
+                    "  …  2 => [0, 0, 0, 0], 3 => [0, 0, 0], 4 => [0, 0], 5 => [1])"
+        @test sprint(show, B, context=:limit=>true) == expstr
+
         B = BandedMatrix(0=>1:3)
         sout = sprint(show, to_indices(B, (band(0),))[1])
         @test occursin(repr(diagind(B)), sout)
@@ -118,3 +136,5 @@ import BandedMatrices: _BandedMatrix, DefaultBandedMatrix
         @test_throws BoundsError A[-5,-5+3]
     end
 end
+
+end # module
